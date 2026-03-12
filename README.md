@@ -214,6 +214,24 @@ VoiceApp/
 
 ## Cloud Deployment Notes
 
+### Railway (recommended setup: 2 services)
+
+Deploy `server` and `client` as separate Railway services using the per-folder configs:
+
+1. Create a **Server service** with root directory `server/` (or deploy repo root with the root `railway.json`).
+2. Create a **Client service** with root directory `client/`.
+3. Set server env vars:
+   - `MONGODB_URI`
+   - `JWT_SECRET`
+   - `CLIENT_URL` = your Railway client URL (for CORS)
+   - `EMAIL_*` vars if you want real OTP emails
+4. Set client env vars:
+   - `NEXT_PUBLIC_API_URL` = your Railway server URL
+   - `NEXT_PUBLIC_METERED_API_KEY` (optional but recommended for better call reliability)
+5. Redeploy both services after updating URLs/env vars.
+
+If you only deploy one root service, only the backend is served; the Next.js frontend must be deployed as its own service.
+
 For production deployment:
 
 1. **TURN Server**: Add a TURN server for reliable NAT traversal (Twilio, Metered, or self-hosted Coturn)
