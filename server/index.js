@@ -17,8 +17,32 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 
+const normalizeOrigin = (value) => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
+      console.warn(
+        `⚠️ CLIENT_URL entry "${trimmed}" includes path/query/hash. Using origin "${parsed.origin}" for CORS.`
+      );
+    }
+    return parsed.origin;
+  } catch {
+    // If URL parsing fails (for custom/local setups), use a clean trimmed value.
+    return trimmed.replace(/\/+$/, '');
+  }
+};
+
 // Parse allowed origins (comma-separated for multiple domains)
-const allowedOrigins = CLIENT_URL.split(',').map(url => url.trim());
+const allowedOrigins = Array.from(
+  new Set(
+    CLIENT_URL.split(',')
+      .map(normalizeOrigin)
+      .filter(Boolean)
+  )
+);
 
 // Trust proxy — required for rate limiting behind Railway/render reverse proxy
 app.set('trust proxy', 1);
