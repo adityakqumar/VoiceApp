@@ -1,11 +1,11 @@
 'use client';
 
 import { useAuth } from '@/context/AuthContext';
-import { useCall, CALL_STATES } from '@/context/CallContext';
+import { useCall, ROOM_STATES } from '@/context/CallContext';
 
 export default function Navbar() {
   const { user, logout } = useAuth();
-  const { callState } = useCall();
+  const { roomState } = useCall();
 
   return (
     <nav
@@ -52,7 +52,7 @@ export default function Navbar() {
         >
           VoiceApp
         </span>
-        {callState === CALL_STATES.CONNECTED && (
+        {roomState === ROOM_STATES.CONNECTED && (
           <span
             style={{
               fontSize: '0.75rem',

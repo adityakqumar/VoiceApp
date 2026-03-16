@@ -2,290 +2,241 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { getSocket } from '@/lib/socket';
-import {
-  createPeerConnection,
-  getLocalAudioStream,
-  createOffer,
-  createAnswer,
-  setRemoteDescription,
-  addIceCandidate,
-  closePeerConnection,
-  stopStream,
-} from '@/lib/webrtc';
 import { useAuth } from './AuthContext';
 
 const CallContext = createContext(null);
 
-// Call states
-export const CALL_STATES = {
+export const ROOM_STATES = {
   IDLE: 'idle',
-  CALLING: 'calling',
-  INCOMING: 'incoming',
+  JOINING: 'joining',
   CONNECTED: 'connected',
 };
 
 export function CallProvider({ children }) {
-  const { isAuthenticated, user } = useAuth();
-  const [callState, setCallState] = useState(CALL_STATES.IDLE);
-  const [remoteUser, setRemoteUser] = useState(null);
+  const { isAuthenticated } = useAuth();
+  const [roomState, setRoomState] = useState(ROOM_STATES.IDLE);
+  const [activeUsers, setActiveUsers] = useState([]);
+  const [roomEvents, setRoomEvents] = useState([]);
   const [isMuted, setIsMuted] = useState(false);
-  const [callDuration, setCallDuration] = useState(0);
-  const [onlineUsers, setOnlineUsers] = useState([]);
 
-  const peerConnectionRef = useRef(null);
+  // Map: socketId -> RTCPeerConnection
+  const peerConnectionsRef = useRef(new Map());
   const localStreamRef = useRef(null);
-  const remoteAudioRef = useRef(null);
-  const callTimerRef = useRef(null);
-  const incomingOfferRef = useRef(null);
 
-  // Set up socket event listeners
+  // We play audio by creating Audio elements dynamically
+  const audioElementsRef = useRef(new Map());
+
+  const addRoomEvent = useCallback((event) => {
+    setRoomEvents((prev) => [...prev, event]);
+  }, []);
+
+  const createPeerConnection = useCallback((targetSocketId, isInitiator) => {
+    const socket = getSocket();
+    if (!socket) return null;
+
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ],
+    });
+
+    // Add local tracks
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => {
+        pc.addTrack(track, localStreamRef.current);
+      });
+    }
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit('ice-candidate', { targetSocketId, candidate: event.candidate });
+      }
+    };
+
+    pc.ontrack = (event) => {
+      if (!audioElementsRef.current.has(targetSocketId)) {
+        const audioEl = new Audio();
+        audioEl.autoplay = true;
+        audioElementsRef.current.set(targetSocketId, audioEl);
+      }
+      const audioEl = audioElementsRef.current.get(targetSocketId);
+      audioEl.srcObject = event.streams[0];
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+        cleanupPeer(targetSocketId);
+      }
+    };
+
+    peerConnectionsRef.current.set(targetSocketId, pc);
+    return pc;
+  }, []);
+
+  const cleanupPeer = useCallback((targetSocketId) => {
+    const pc = peerConnectionsRef.current.get(targetSocketId);
+    if (pc) {
+      pc.close();
+      peerConnectionsRef.current.delete(targetSocketId);
+    }
+    const audioEl = audioElementsRef.current.get(targetSocketId);
+    if (audioEl) {
+      audioEl.srcObject = null;
+      audioElementsRef.current.delete(targetSocketId);
+    }
+  }, []);
+
   useEffect(() => {
     if (!isAuthenticated) return;
 
     const socket = getSocket();
     if (!socket) return;
 
-    // Request online users on connect
-    const handleConnect = () => {
-      socket.emit('get-online-users');
-    };
-
-    // Online users list
-    const handleOnlineUsers = (users) => {
-      setOnlineUsers(users);
-    };
-
-    // User came online
-    const handleUserOnline = (userData) => {
-      setOnlineUsers((prev) => {
-        if (prev.find((u) => u.callId === userData.callId)) return prev;
-        return [...prev, userData];
-      });
-    };
-
-    // User went offline
-    const handleUserOffline = ({ callId }) => {
-      setOnlineUsers((prev) => prev.filter((u) => u.callId !== callId));
-    };
-
-    // Incoming call
-    const handleIncomingCall = async ({ from, offer }) => {
-      if (callState !== CALL_STATES.IDLE) {
-        // Busy — reject
-        socket.emit('reject-call', { targetCallId: from.callId });
-        return;
-      }
-      setRemoteUser(from);
-      incomingOfferRef.current = offer;
-      setCallState(CALL_STATES.INCOMING);
-    };
-
-    // Call answered
-    const handleCallAnswered = async ({ from, answer }) => {
-      try {
-        if (peerConnectionRef.current) {
-          await setRemoteDescription(peerConnectionRef.current, answer);
+    const handleRoomActiveUsers = async (users) => {
+      setActiveUsers(users);
+      setRoomState(ROOM_STATES.CONNECTED);
+      
+      // We are connecting to all existing users
+      for (const user of users) {
+        const pc = createPeerConnection(user.socketId, true);
+        if (pc) {
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.emit('offer', { targetSocketId: user.socketId, offer });
+          } catch (e) {
+            console.error('Error creating offer for', user.displayName, e);
+          }
         }
-        setCallState(CALL_STATES.CONNECTED);
-        startCallTimer();
-      } catch (error) {
-        console.error('Error handling call answer:', error);
-        cleanupCall();
       }
     };
 
-    // ICE candidate
-    const handleIceCandidate = ({ candidate }) => {
-      if (peerConnectionRef.current && candidate) {
-        addIceCandidate(peerConnectionRef.current, candidate);
+    const handleUserJoined = (user) => {
+      setActiveUsers((prev) => [...prev, user]);
+      addRoomEvent({
+        id: Math.random().toString(),
+        type: 'join',
+        message: `${user.displayName} joined the room`,
+        timestamp: user.timestamp
+      });
+      // We wait for the new user to send us an offer
+    };
+
+    const handleUserLeft = (user) => {
+      setActiveUsers((prev) => prev.filter((u) => u.callId !== user.callId));
+      addRoomEvent({
+        id: Math.random().toString(),
+        type: 'leave',
+        message: `${user.displayName} left the room`,
+        timestamp: user.timestamp
+      });
+      
+      // Cleanup peer connection based on socketId if we had it mapped
+      // For simplicity, we can clean up any disconnected peers automatically 
+      // via iceConnectionState change, but if we had their socketId, we could do it here.
+    };
+
+    // Signaling
+    const handleOffer = async ({ fromSocketId, fromCallId, displayName, offer }) => {
+      try {
+        let pc = peerConnectionsRef.current.get(fromSocketId);
+        if (!pc) {
+          pc = createPeerConnection(fromSocketId, false);
+        }
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit('answer', { targetSocketId: fromSocketId, answer });
+      } catch (err) {
+        console.error('Error handling offer:', err);
       }
     };
 
-    // Call rejected
-    const handleCallRejected = () => {
-      cleanupCall();
+    const handleAnswer = async ({ fromSocketId, answer }) => {
+      const pc = peerConnectionsRef.current.get(fromSocketId);
+      if (pc) {
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        } catch (err) {
+          console.error('Error handling answer:', err);
+        }
+      }
     };
 
-    // Call ended
-    const handleCallEnded = () => {
-      cleanupCall();
+    const handleIceCandidate = async ({ fromSocketId, candidate }) => {
+      const pc = peerConnectionsRef.current.get(fromSocketId);
+      if (pc) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+          console.error('Error adding ICE candidate:', err);
+        }
+      }
     };
 
-    // Call error
-    const handleCallError = ({ message }) => {
-      console.error('Call error:', message);
-      cleanupCall();
-    };
-
-    socket.on('connect', handleConnect);
-    socket.on('online-users', handleOnlineUsers);
-    socket.on('user-online', handleUserOnline);
-    socket.on('user-offline', handleUserOffline);
-    socket.on('incoming-call', handleIncomingCall);
-    socket.on('call-answered', handleCallAnswered);
+    socket.on('room-active-users', handleRoomActiveUsers);
+    socket.on('user-joined', handleUserJoined);
+    socket.on('user-left', handleUserLeft);
+    socket.on('offer', handleOffer);
+    socket.on('answer', handleAnswer);
     socket.on('ice-candidate', handleIceCandidate);
-    socket.on('call-rejected', handleCallRejected);
-    socket.on('call-ended', handleCallEnded);
-    socket.on('call-error', handleCallError);
-
-    // If already connected, request online users
-    if (socket.connected) {
-      socket.emit('get-online-users');
-    }
 
     return () => {
-      socket.off('connect', handleConnect);
-      socket.off('online-users', handleOnlineUsers);
-      socket.off('user-online', handleUserOnline);
-      socket.off('user-offline', handleUserOffline);
-      socket.off('incoming-call', handleIncomingCall);
-      socket.off('call-answered', handleCallAnswered);
+      socket.off('room-active-users', handleRoomActiveUsers);
+      socket.off('user-joined', handleUserJoined);
+      socket.off('user-left', handleUserLeft);
+      socket.off('offer', handleOffer);
+      socket.off('answer', handleAnswer);
       socket.off('ice-candidate', handleIceCandidate);
-      socket.off('call-rejected', handleCallRejected);
-      socket.off('call-ended', handleCallEnded);
-      socket.off('call-error', handleCallError);
     };
-  }, [isAuthenticated, callState]);
+  }, [isAuthenticated, createPeerConnection, addRoomEvent]);
 
-  const startCallTimer = () => {
-    setCallDuration(0);
-    callTimerRef.current = setInterval(() => {
-      setCallDuration((prev) => prev + 1);
-    }, 1000);
-  };
+  const joinRoom = useCallback(async () => {
+    try {
+      setRoomState(ROOM_STATES.JOINING);
+      
+      // Get microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      localStreamRef.current = stream;
 
-  const cleanupCall = useCallback(() => {
-    if (callTimerRef.current) {
-      clearInterval(callTimerRef.current);
-      callTimerRef.current = null;
+      const socket = getSocket();
+      if (socket) {
+        socket.emit('join-room');
+      }
+    } catch (err) {
+      console.error('Failed to get local stream or join room:', err);
+      setRoomState(ROOM_STATES.IDLE);
     }
-
-    closePeerConnection(peerConnectionRef.current);
-    peerConnectionRef.current = null;
-
-    stopStream(localStreamRef.current);
-    localStreamRef.current = null;
-
-    incomingOfferRef.current = null;
-
-    setCallState(CALL_STATES.IDLE);
-    setRemoteUser(null);
-    setIsMuted(false);
-    setCallDuration(0);
   }, []);
 
-  // Start a call
-  const startCall = useCallback(async (targetCallId, targetDisplayName) => {
+  const leaveRoom = useCallback(() => {
     const socket = getSocket();
-    if (!socket) return;
-
-    try {
-      setCallState(CALL_STATES.CALLING);
-      setRemoteUser({ callId: targetCallId, displayName: targetDisplayName });
-
-      // Get local audio stream
-      const localStream = await getLocalAudioStream();
-      localStreamRef.current = localStream;
-
-      // Create peer connection
-      const pc = await createPeerConnection(
-        // onIceCandidate
-        (candidate) => {
-          socket.emit('ice-candidate', { targetCallId, candidate });
-        },
-        // onTrack
-        (remoteStream) => {
-          if (remoteAudioRef.current) {
-            remoteAudioRef.current.srcObject = remoteStream;
-          }
-        },
-        // onConnectionStateChange
-        (state) => {
-          console.log('Connection state:', state);
-          if (state === 'disconnected' || state === 'failed') {
-            cleanupCall();
-          }
-        }
-      );
-
-      peerConnectionRef.current = pc;
-
-      // Add local tracks
-      localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, localStream);
-      });
-
-      // Create and send offer
-      const offer = await createOffer(pc);
-      socket.emit('call-user', { targetCallId, offer });
-    } catch (error) {
-      console.error('Failed to start call:', error);
-      cleanupCall();
+    if (socket) {
+      socket.emit('leave-room');
     }
-  }, [cleanupCall]);
 
-  // Answer incoming call
-  const answerCall = useCallback(async () => {
-    const socket = getSocket();
-    if (!socket || !incomingOfferRef.current || !remoteUser) return;
-
-    try {
-      const localStream = await getLocalAudioStream();
-      localStreamRef.current = localStream;
-
-      const pc = await createPeerConnection(
-        (candidate) => {
-          socket.emit('ice-candidate', { targetCallId: remoteUser.callId, candidate });
-        },
-        (remoteStream) => {
-          if (remoteAudioRef.current) {
-            remoteAudioRef.current.srcObject = remoteStream;
-          }
-        },
-        (state) => {
-          console.log('Connection state:', state);
-          if (state === 'disconnected' || state === 'failed') {
-            cleanupCall();
-          }
-        }
-      );
-
-      peerConnectionRef.current = pc;
-
-      localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, localStream);
-      });
-
-      await setRemoteDescription(pc, incomingOfferRef.current);
-      const answer = await createAnswer(pc);
-
-      socket.emit('call-answer', { targetCallId: remoteUser.callId, answer });
-
-      setCallState(CALL_STATES.CONNECTED);
-      startCallTimer();
-    } catch (error) {
-      console.error('Failed to answer call:', error);
-      cleanupCall();
+    // Close all peer connections
+    peerConnectionsRef.current.forEach((pc) => pc.close());
+    peerConnectionsRef.current.clear();
+    
+    // Stop local audio
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
     }
-  }, [remoteUser, cleanupCall]);
 
-  // Reject incoming call
-  const rejectCall = useCallback(() => {
-    const socket = getSocket();
-    if (socket && remoteUser) {
-      socket.emit('reject-call', { targetCallId: remoteUser.callId });
-    }
-    cleanupCall();
-  }, [remoteUser, cleanupCall]);
+    // Cleanup audio elements
+    audioElementsRef.current.forEach((audio) => {
+      audio.srcObject = null;
+    });
+    audioElementsRef.current.clear();
 
-  // End active call
-  const endCall = useCallback(() => {
-    const socket = getSocket();
-    if (socket && remoteUser) {
-      socket.emit('end-call', { targetCallId: remoteUser.callId });
-    }
-    cleanupCall();
-  }, [remoteUser, cleanupCall]);
+    setRoomState(ROOM_STATES.IDLE);
+    setActiveUsers([]);
+    setRoomEvents([]);
+    setIsMuted(false);
+  }, []);
 
   // Toggle mute
   const toggleMute = useCallback(() => {
@@ -301,21 +252,15 @@ export function CallProvider({ children }) {
   return (
     <CallContext.Provider
       value={{
-        callState,
-        remoteUser,
+        roomState,
+        activeUsers,
+        roomEvents,
         isMuted,
-        callDuration,
-        onlineUsers,
-        startCall,
-        answerCall,
-        rejectCall,
-        endCall,
+        joinRoom,
+        leaveRoom,
         toggleMute,
-        remoteAudioRef,
       }}
     >
-      {/* Hidden audio element for remote stream */}
-      <audio ref={remoteAudioRef} autoPlay playsInline />
       {children}
     </CallContext.Provider>
   );

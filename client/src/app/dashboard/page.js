@@ -1,24 +1,24 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
-import { useCall, CALL_STATES } from '@/context/CallContext';
-import api from '@/lib/api';
+import { useCall, ROOM_STATES } from '@/context/CallContext';
 import Navbar from '@/components/Navbar';
-import IncomingCall from '@/components/IncomingCall';
-import ActiveCall from '@/components/ActiveCall';
 
 export default function DashboardPage() {
   const router = useRouter();
   const { user, isAuthenticated, isProfileComplete, loading } = useAuth();
-  const { callState, onlineUsers, startCall } = useCall();
-
-  const [targetCallId, setTargetCallId] = useState('');
-  const [lookupResult, setLookupResult] = useState(null);
-  const [lookupError, setLookupError] = useState('');
-  const [callError, setCallError] = useState('');
-  const [copied, setCopied] = useState(false);
+  const { 
+    roomState, 
+    activeUsers, 
+    roomEvents, 
+    isMuted, 
+    joinRoom, 
+    leaveRoom, 
+    toggleMute 
+  } = useCall();
+  const eventsEndRef = useRef(null);
 
   useEffect(() => {
     if (!loading && !isAuthenticated) {
@@ -27,6 +27,11 @@ export default function DashboardPage() {
       router.push('/login');
     }
   }, [loading, isAuthenticated, isProfileComplete, router]);
+
+  // Auto-scroll events
+  useEffect(() => {
+    eventsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [roomEvents]);
 
   if (loading || !isAuthenticated || !isProfileComplete) {
     return (
@@ -44,49 +49,14 @@ export default function DashboardPage() {
     );
   }
 
-  const handleLookup = async () => {
-    if (!targetCallId.trim()) return;
-    setLookupError('');
-    setLookupResult(null);
-
-    try {
-      const data = await api.lookupUser(targetCallId.trim().toUpperCase());
-      setLookupResult(data);
-    } catch (err) {
-      setLookupError(err.message);
-    }
-  };
-
-  const handleCall = async () => {
-    if (!lookupResult) return;
-    setCallError('');
-    try {
-      await startCall(lookupResult.callId, lookupResult.displayName);
-    } catch (err) {
-      setCallError(err.message);
-    }
-  };
-
-  const handleDirectCall = async (targetUser) => {
-    setCallError('');
-    try {
-      await startCall(targetUser.callId, targetUser.displayName);
-    } catch (err) {
-      setCallError(err.message);
-    }
-  };
-
-  const copyCallId = () => {
-    navigator.clipboard.writeText(user.callId);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const formatTime = (isoString) => {
+    const d = new Date(isoString);
+    return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
   };
 
   return (
     <>
       <Navbar />
-      <IncomingCall />
-      <ActiveCall />
 
       <div className="gradient-bg" style={{ minHeight: '100vh', paddingTop: 90 }}>
         <div style={{ maxWidth: 900, margin: '0 auto', padding: '0 20px 40px' }}>
@@ -123,328 +93,304 @@ export default function DashboardPage() {
             </div>
             <div style={{ flex: 1, minWidth: 200 }}>
               <h1 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: 4 }}>
-                {user.displayName}
+                Welcome, {user.displayName}
               </h1>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    padding: '6px 14px',
-                    borderRadius: 8,
-                    background: 'rgba(59, 130, 246, 0.1)',
-                    border: '1px solid rgba(59, 130, 246, 0.2)',
-                    fontSize: '0.9rem',
-                    fontWeight: 600,
-                    color: '#3b82f6',
-                    fontFamily: 'monospace',
-                  }}
-                >
-                  📋 {user.callId}
-                </span>
-                <button
-                  onClick={copyCallId}
-                  style={{
-                    padding: '6px 14px',
-                    borderRadius: 8,
-                    background: copied ? 'rgba(16, 185, 129, 0.15)' : 'rgba(30, 41, 59, 0.7)',
-                    border: copied
-                      ? '1px solid rgba(16, 185, 129, 0.3)'
-                      : '1px solid rgba(30, 58, 95, 0.5)',
-                    color: copied ? '#10b981' : '#94a3b8',
-                    cursor: 'pointer',
-                    fontSize: '0.8rem',
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  {copied ? '✓ Copied!' : 'Copy'}
-                </button>
-              </div>
-              <p style={{ fontSize: '0.8rem', color: '#64748b', marginTop: 8 }}>
-                Share your Call ID with others so they can reach you
+              <p style={{ fontSize: '0.9rem', color: '#94a3b8' }}>
+                Join the global room to start talking with everyone.
               </p>
+            </div>
+
+            {/* Main Action Button */}
+            <div>
+              {roomState === ROOM_STATES.IDLE && (
+                <button
+                  onClick={joinRoom}
+                  className="btn-success"
+                  style={{
+                    padding: '16px 32px',
+                    fontSize: '1.1rem',
+                    borderRadius: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    boxShadow: '0 4px 20px rgba(16, 185, 129, 0.3)'
+                  }}
+                >
+                  🎧 Join Global Room
+                </button>
+              )}
+              {roomState === ROOM_STATES.JOINING && (
+                <button disabled className="btn-success" style={{ padding: '16px 32px', opacity: 0.7 }}>
+                  Joining...
+                </button>
+              )}
+              {roomState === ROOM_STATES.CONNECTED && (
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <button
+                    onClick={toggleMute}
+                    style={{
+                      padding: '14px 24px',
+                      borderRadius: '12px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontSize: '1rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      fontWeight: 600,
+                      background: isMuted ? 'rgba(239, 68, 68, 0.2)' : 'rgba(30, 41, 59, 0.7)',
+                      color: isMuted ? '#ef4444' : '#e2e8f0',
+                      border: isMuted ? '2px solid rgba(239, 68, 68, 0.4)' : '2px solid rgba(30, 58, 95, 0.5)',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    {isMuted ? '🔇 Unmute' : '🎤 Mute'}
+                  </button>
+                  <button
+                    onClick={leaveRoom}
+                    className="btn-danger"
+                    style={{
+                      padding: '14px 24px',
+                      borderRadius: '12px',
+                      fontSize: '1rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8
+                    }}
+                  >
+                    📵 Leave Room
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Grid: Dial & Online */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-              gap: 24,
-            }}
-          >
-            {/* Dial section */}
-            <div className="glass-card" style={{ padding: '28px' }}>
-              <h2
-                style={{
-                  fontSize: '1.1rem',
-                  fontWeight: 700,
-                  marginBottom: 20,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                }}
-              >
-                <span style={{ fontSize: '1.3rem' }}>📱</span>
-                Make a Call
-              </h2>
-
-              <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
-                <input
-                  type="text"
-                  className="input-field"
-                  placeholder="Enter Call ID (e.g. CALL-A3F8K2)"
-                  value={targetCallId}
-                  onChange={(e) => {
-                    setTargetCallId(e.target.value.toUpperCase());
-                    setLookupResult(null);
-                    setLookupError('');
-                  }}
-                  style={{ flex: 1 }}
-                />
-                <button
-                  onClick={handleLookup}
-                  className="btn-primary"
-                  disabled={!targetCallId.trim()}
-                  style={{ padding: '12px 20px', whiteSpace: 'nowrap' }}
-                >
-                  Find
-                </button>
-              </div>
-
-              {lookupError && (
-                <div
+          {/* Grid: Events & Online users when connected */}
+          {roomState === ROOM_STATES.CONNECTED && (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+                gap: 24,
+              }}
+            >
+              {/* Event Feed */}
+              <div className="glass-card" style={{ padding: '28px', display: 'flex', flexDirection: 'column' }}>
+                <h2
                   style={{
-                    padding: '10px 14px',
-                    borderRadius: 8,
-                    background: 'rgba(239, 68, 68, 0.1)',
-                    border: '1px solid rgba(239, 68, 68, 0.3)',
-                    color: '#ef4444',
-                    fontSize: '0.85rem',
-                    marginBottom: 12,
-                  }}
-                >
-                  {lookupError}
-                </div>
-              )}
-
-              {callError && (
-                <div
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: 8,
-                    background: 'rgba(239, 68, 68, 0.1)',
-                    border: '1px solid rgba(239, 68, 68, 0.3)',
-                    color: '#ef4444',
-                    fontSize: '0.85rem',
-                    marginBottom: 12,
-                  }}
-                >
-                  {callError}
-                </div>
-              )}
-
-              {lookupResult && (
-                <div
-                  style={{
+                    fontSize: '1.1rem',
+                    fontWeight: 700,
+                    marginBottom: 20,
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '14px 18px',
-                    borderRadius: 12,
-                    background: 'rgba(59, 130, 246, 0.08)',
-                    border: '1px solid rgba(59, 130, 246, 0.2)',
+                    gap: 10,
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span style={{ fontSize: '1.3rem' }}>📜</span>
+                  Room Events
+                </h2>
+                
+                <div 
+                  style={{
+                    flex: 1,
+                    minHeight: '200px',
+                    maxHeight: '400px',
+                    overflowY: 'auto',
+                    background: 'rgba(15, 23, 42, 0.4)',
+                    borderRadius: '12px',
+                    padding: '16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px'
+                  }}
+                >
+                  {roomEvents.length === 0 ? (
+                    <div style={{ color: '#64748b', textAlign: 'center', margin: 'auto' }}>
+                      No events yet.
+                    </div>
+                  ) : (
+                    roomEvents.map((ev) => (
+                      <div 
+                        key={ev.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '12px',
+                          fontSize: '0.9rem'
+                        }}
+                      >
+                        <span style={{ color: '#64748b', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+                          [{formatTime(ev.timestamp)}]
+                        </span>
+                        <span style={{ 
+                          color: ev.type === 'join' ? '#10b981' : '#ef4444',
+                          fontWeight: 500
+                        }}>
+                          {ev.message}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                  <div ref={eventsEndRef} />
+                </div>
+              </div>
+
+              {/* Active Users */}
+              <div className="glass-card" style={{ padding: '28px' }}>
+                <h2
+                  style={{
+                    fontSize: '1.1rem',
+                    fontWeight: 700,
+                    marginBottom: 20,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                  }}
+                >
+                  <span className="status-dot status-online" style={{ width: 12, height: 12 }} />
+                  In Room
+                  <span
+                    style={{
+                      fontSize: '0.8rem',
+                      fontWeight: 500,
+                      color: '#64748b',
+                      marginLeft: 'auto',
+                    }}
+                  >
+                    {activeUsers.length + 1} participants
+                  </span>
+                </h2>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {/* Self User */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '12px 16px',
+                      borderRadius: 12,
+                      background: 'rgba(59, 130, 246, 0.1)',
+                      border: '1px solid rgba(59, 130, 246, 0.3)',
+                    }}
+                  >
                     <div
                       style={{
-                        width: 40,
-                        height: 40,
+                        width: 36,
+                        height: 36,
                         borderRadius: '50%',
                         background: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        fontSize: '1rem',
+                        fontSize: '0.85rem',
                         fontWeight: 700,
                         color: 'white',
+                        marginRight: 12
                       }}
                     >
-                      {lookupResult.displayName?.charAt(0)?.toUpperCase()}
+                      {user.displayName?.charAt(0)?.toUpperCase()}
                     </div>
                     <div>
-                      <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>
-                        {lookupResult.displayName}
+                      <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#60a5fa' }}>
+                        {user.displayName} (You)
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                        {lookupResult.callId}
+                      <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                        Joined just now
                       </div>
                     </div>
+                    <div style={{ marginLeft: 'auto', fontSize: '1.2rem' }}>
+                      {isMuted ? '🔇' : '🎤'}
+                    </div>
                   </div>
-                  <button
-                    onClick={handleCall}
-                    className="btn-success"
-                    style={{ padding: '10px 20px', fontSize: '0.85rem' }}
-                  >
-                    📞 Call
-                  </button>
-                </div>
-              )}
-            </div>
 
-            {/* Online users */}
-            <div className="glass-card" style={{ padding: '28px' }}>
-              <h2
-                style={{
-                  fontSize: '1.1rem',
-                  fontWeight: 700,
-                  marginBottom: 20,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                }}
-              >
-                <span className="status-dot status-online" />
-                Online Users
-                <span
-                  style={{
-                    fontSize: '0.8rem',
-                    fontWeight: 500,
-                    color: '#64748b',
-                    marginLeft: 'auto',
-                  }}
-                >
-                  {onlineUsers.length} online
-                </span>
-              </h2>
-
-              {onlineUsers.length === 0 ? (
-                <div
-                  style={{
-                    textAlign: 'center',
-                    padding: '32px 20px',
-                    color: '#64748b',
-                  }}
-                >
-                  <div style={{ fontSize: '2rem', marginBottom: 8 }}>👥</div>
-                  <p style={{ fontSize: '0.9rem' }}>No other users online</p>
-                  <p style={{ fontSize: '0.8rem', marginTop: 4 }}>
-                    Share your Call ID to connect
-                  </p>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {onlineUsers.map((u) => (
+                  {/* Remote Users */}
+                  {activeUsers.map((u) => (
                     <div
                       key={u.callId}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'space-between',
                         padding: '12px 16px',
                         borderRadius: 12,
                         background: 'rgba(30, 41, 59, 0.5)',
                         border: '1px solid rgba(30, 58, 95, 0.3)',
-                        transition: 'all 0.2s',
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <div
-                          style={{
-                            width: 36,
-                            height: 36,
-                            borderRadius: '50%',
-                            background: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '0.85rem',
-                            fontWeight: 700,
-                            color: 'white',
-                          }}
-                        >
-                          {u.displayName?.charAt(0)?.toUpperCase()}
-                        </div>
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
-                            {u.displayName}
-                          </div>
-                          <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                            {u.callId}
-                          </div>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => handleDirectCall(u)}
-                        disabled={callState !== CALL_STATES.IDLE}
+                      <div
                         style={{
                           width: 36,
                           height: 36,
                           borderRadius: '50%',
-                          background: 'rgba(16, 185, 129, 0.15)',
-                          border: '1px solid rgba(16, 185, 129, 0.3)',
-                          color: '#10b981',
-                          cursor: 'pointer',
-                          fontSize: '1rem',
+                          background: 'linear-gradient(135deg, #8b5cf6, #ec4899)',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          transition: 'all 0.2s',
+                          fontSize: '0.85rem',
+                          fontWeight: 700,
+                          color: 'white',
+                          marginRight: 12
                         }}
                       >
-                        📞
-                      </button>
+                        {u.displayName?.charAt(0)?.toUpperCase()}
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+                          {u.displayName}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                          Joined at {formatTime(u.timestamp || u.joinTime || new Date())}
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
-              )}
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* How it works */}
-          <div className="glass-card" style={{ padding: '28px', marginTop: 24 }}>
-            <h2
-              style={{
-                fontSize: '1.1rem',
-                fontWeight: 700,
-                marginBottom: 20,
-              }}
-            >
-              How It Works
-            </h2>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                gap: 20,
-              }}
-            >
-              {[
-                { icon: '📋', title: 'Share Your ID', desc: 'Copy your Call ID and share it with friends' },
-                { icon: '📞', title: 'Make a Call', desc: 'Enter their Call ID and hit Call' },
-                { icon: '🔒', title: 'Private & Secure', desc: 'Peer-to-peer encrypted voice — emails stay private' },
-              ].map((item, i) => (
-                <div
-                  key={i}
-                  style={{
-                    textAlign: 'center',
-                    padding: '20px 16px',
-                    borderRadius: 12,
-                    background: 'rgba(30, 41, 59, 0.3)',
-                  }}
-                >
-                  <div style={{ fontSize: '2rem', marginBottom: 10 }}>{item.icon}</div>
-                  <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: 6 }}>
-                    {item.title}
+          {/* How it works (when not connected) */}
+          {roomState === ROOM_STATES.IDLE && (
+            <div className="glass-card" style={{ padding: '28px', marginTop: 24 }}>
+              <h2
+                style={{
+                  fontSize: '1.1rem',
+                  fontWeight: 700,
+                  marginBottom: 20,
+                }}
+              >
+                Welcome to the Global Room
+              </h2>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                  gap: 20,
+                }}
+              >
+                {[
+                  { icon: '🌍', title: 'One Room', desc: 'Everyone connects to the same common space' },
+                  { icon: '🎧', title: 'Speak & Listen', desc: 'Real-time multi-way voice chat' },
+                  { icon: '🔒', title: 'Private & Secure', desc: 'Emails are hidden, only names are shown' },
+                ].map((item, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      textAlign: 'center',
+                      padding: '20px 16px',
+                      borderRadius: 12,
+                      background: 'rgba(30, 41, 59, 0.3)',
+                    }}
+                  >
+                    <div style={{ fontSize: '2rem', marginBottom: 10 }}>{item.icon}</div>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: 6 }}>
+                      {item.title}
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b' }}>{item.desc}</div>
                   </div>
-                  <div style={{ fontSize: '0.8rem', color: '#64748b' }}>{item.desc}</div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </>
