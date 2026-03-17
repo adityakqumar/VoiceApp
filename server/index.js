@@ -79,6 +79,17 @@ app.get('/api/health', (req, res) => {
 // Setup WebRTC signaling
 setupSignaling(io);
 
+// Self-ping to keep Render awake (runs every 14 minutes)
+const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://voiceapp-server.onrender.com';
+setInterval(() => {
+  const https = require('https');
+  https.get(`${RENDER_EXTERNAL_URL}/api/health`, (res) => {
+    console.log(`Self-ping status: ${res.statusCode}`);
+  }).on('error', (err) => {
+    console.error('Self-ping failed:', err.message);
+  });
+}, 14 * 60 * 1000);
+
 // Connect DB and start server
 connectDB().then(() => {
   server.listen(PORT, '0.0.0.0', () => {

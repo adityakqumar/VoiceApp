@@ -1,0 +1,13 @@
+name: Keep Alive Render Server
+on:
+  schedule:
+    - cron: '*/14 * * * *' # Runs every 14 minutes
+  workflow_dispatch: # Allows manual trigger
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake up Render
+        # Uses the repository secret RENDER_URL if set, or a placeholder
+        run: curl -s ${{ secrets.RENDER_URL || 'https://voiceapp-server.onrender.com' }}/api/health
