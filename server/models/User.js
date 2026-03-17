@@ -18,17 +18,10 @@ const userSchema = new mongoose.Schema({
     unique: true,
     index: true,
   },
-  email: {
+  displayName: {
     type: String,
     required: true,
     unique: true,
-    lowercase: true,
-    trim: true,
-  },
-  displayName: {
-    type: String,
-    unique: true,
-    sparse: true, // allows null until user sets it
     trim: true,
     minlength: 2,
     maxlength: 30,
@@ -39,23 +32,18 @@ const userSchema = new mongoose.Schema({
     unique: true,
     index: true,
   },
-  isProfileComplete: {
-    type: Boolean,
-    default: false,
-  },
   createdAt: {
     type: Date,
     default: Date.now,
   },
 });
 
-// IMPORTANT: Never return email in JSON responses
+// IMPORTANT: Never return private info in JSON responses
 userSchema.methods.toSafeJSON = function () {
   return {
     internalId: this.internalId,
     displayName: this.displayName,
     callId: this.callId,
-    isProfileComplete: this.isProfileComplete,
   };
 };
 

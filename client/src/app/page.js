@@ -6,17 +6,17 @@ import { useEffect } from 'react';
 
 export default function HomePage() {
   const router = useRouter();
-  const { isAuthenticated, isProfileComplete, loading } = useAuth();
+  const { isAuthenticated, loading } = useAuth();
 
   useEffect(() => {
     if (!loading) {
-      if (isAuthenticated && isProfileComplete) {
+      if (isAuthenticated) {
         router.push('/dashboard');
       } else {
         router.push('/login');
       }
     }
-  }, [loading, isAuthenticated, isProfileComplete, router]);
+  }, [loading, isAuthenticated, router]);
 
   return (
     <div

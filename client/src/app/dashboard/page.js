@@ -8,7 +8,7 @@ import Navbar from '@/components/Navbar';
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, isAuthenticated, isProfileComplete, loading } = useAuth();
+  const { user, isAuthenticated, loading } = useAuth();
   const { 
     roomState, 
     activeUsers, 
@@ -23,17 +23,15 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!loading && !isAuthenticated) {
       router.push('/login');
-    } else if (!loading && isAuthenticated && !isProfileComplete) {
-      router.push('/login');
     }
-  }, [loading, isAuthenticated, isProfileComplete, router]);
+  }, [loading, isAuthenticated, router]);
 
   // Auto-scroll events
   useEffect(() => {
     eventsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [roomEvents]);
 
-  if (loading || !isAuthenticated || !isProfileComplete) {
+  if (loading || !isAuthenticated) {
     return (
       <div
         className="gradient-bg"

@@ -69,7 +69,6 @@ export function AuthProvider({ children }) {
         updateUser,
         refreshProfile,
         isAuthenticated: !!token,
-        isProfileComplete: user?.isProfileComplete ?? false,
       }}
     >
       {children}

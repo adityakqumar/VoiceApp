@@ -38,22 +38,8 @@ class ApiClient {
   }
 
   // Auth
-  async sendOtp(email) {
-    return this.request('/api/auth/send-otp', {
-      method: 'POST',
-      body: JSON.stringify({ email }),
-    });
-  }
-
-  async verifyOtp(email, otp) {
-    return this.request('/api/auth/verify-otp', {
-      method: 'POST',
-      body: JSON.stringify({ email, otp }),
-    });
-  }
-
-  async setDisplayName(displayName) {
-    return this.request('/api/auth/set-display-name', {
+  async login(displayName) {
+    return this.request('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ displayName }),
     });
