@@ -44,26 +44,45 @@ const allowedOrigins = Array.from(
   )
 );
 
+// We want to allow development ports AND the production Vercel URL
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true); // Allow non-browser clients (like curl)
+    
+    // Allow any localhost
+    if (origin.startsWith('http://localhost:')) {
+      return callback(null, true);
+    }
+    
+    // Check if origin is in our allowed list
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    // If it's a vercel app url (like aawaj-frontend.vercel.app), let it pass for ease of deployment
+    if (origin.endsWith('.vercel.app')) {
+      return callback(null, true);
+    }
+
+    callback(new Error('Not allowed by CORS'));
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: true,
+};
+
 // Trust proxy — required for rate limiting behind Railway/render reverse proxy
 app.set('trust proxy', 1);
 
 // Socket.IO
 const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ['GET', 'POST'],
-    credentials: true,
-  },
+  cors: corsOptions,
 });
 
 // Middleware
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true,
-}));
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '10kb' }));
 app.use('/api', apiLimiter);
 
