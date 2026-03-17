@@ -60,4 +60,11 @@ userSchema.pre('save', async function (next) {
   next();
 });
 
-module.exports = mongoose.model('User', userSchema);
+const User = mongoose.model('User', userSchema);
+
+// Drop legacy email index if it exists to prevent E11000 Duplicate Key Error on null emails
+User.collection.dropIndex('email_1').catch(() => {
+  // Ignore error if index doesn't exist
+});
+
+module.exports = User;
